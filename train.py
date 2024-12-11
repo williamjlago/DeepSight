@@ -6,11 +6,10 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import transforms
 from PIL import Image
 from deepsight_model import DeepSightModel
+import matplotlib.pyplot as plt
+import warnings
 
-# We define sad=1 (positive class) and happy=0 (negative class) to properly handle pos_weight.
-# sad-faces = 516 images (positive)
-# happy-faces = 1041 images (negative)
-# pos_weight = (#neg/#pos) = 1041/516 ≈ 2.0
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 class FacesDataset(Dataset):
     def __init__(self, root_dir, transform=None):
@@ -43,7 +42,6 @@ class FacesDataset(Dataset):
             img = self.transform(img)
 
         return img, torch.tensor([label], dtype=torch.float32)
-
 
 if __name__ == "__main__":
     data_root = ""
@@ -80,6 +78,11 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
 
+    if torch.cuda.is_available():
+        print("CUDA found, using GPU to train...")
+    else:
+        print("CUDA not available, using CPU to train...")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize model
@@ -105,7 +108,7 @@ if __name__ == "__main__":
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
-            outputs = model(images)  # Outputs are logits now
+            outputs = model(images)  # Outputs are logits
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -156,3 +159,39 @@ if __name__ == "__main__":
     test_loss = total_test_loss / len(test_loader.dataset)
     test_accuracy = correct_test / (len(test_loader.dataset) * 1.0)
     print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
+
+    # Visualization of predictions on test set
+    # Show a subset of images and their predictions
+    max_images_to_show = 10
+    count = 0
+    test_loader_vis = DataLoader(test_dataset, batch_size=1, shuffle=True, num_workers=1)
+
+    model.eval()
+    with torch.no_grad():
+        for images, labels in test_loader_vis:
+            if count >= max_images_to_show:
+                break
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            preds = (torch.sigmoid(outputs) >= 0.5).float()
+
+            # Get the single image and label
+            img = images[0].cpu()
+            label = labels[0].item()
+            pred = preds[0].item()
+
+            # Undo normalization: img was normalized with mean=0.5, std=0.5
+            # img = (img * std) + mean => img = img * 0.5 + 0.5
+            img = img * 0.5 + 0.5
+            pil_img = transforms.ToPILImage()(img)
+
+            pred_emotion = "Sad" if pred == 1.0 else "Happy"
+            true_emotion = "Sad" if label == 1.0 else "Happy"
+            correctness = "Correct" if pred == label else "Incorrect"
+
+            plt.figure(figsize=(4,4))
+            plt.imshow(pil_img, cmap='gray')
+            plt.title(f"Pred: {pred_emotion} | True: {true_emotion} | {correctness}")
+            plt.axis('off')
+            plt.show()
+            count += 1
